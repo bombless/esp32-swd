@@ -1,19 +1,17 @@
 #include <Arduino.h>
 
-// Test the two suspected onboard LED pins on this STM32 board.
-// PA8 and PB2 will blink together.
+// STM32F103C8T6 Blue Pill onboard LED is connected to PC13.
+// The LED is active-low: LOW = on, HIGH = off.
 
 void setup() {
-  pinMode(PA8, OUTPUT);
-  pinMode(PB2, OUTPUT);
+  pinMode(PC13, OUTPUT);
+  digitalWrite(PC13, HIGH);
 }
 
 void loop() {
-  digitalWrite(PA8, HIGH);
-  digitalWrite(PB2, HIGH);
+  digitalWrite(PC13, LOW);
   delay(500);
 
-  digitalWrite(PA8, LOW);
-  digitalWrite(PB2, LOW);
+  digitalWrite(PC13, HIGH);
   delay(500);
 }
