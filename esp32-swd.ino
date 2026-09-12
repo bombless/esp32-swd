@@ -1,10 +1,18 @@
 #include <Arduino.h>
 
+// STM32 USART1 TX (PA9) -> ESP32 GPIO16 (RX2), optional ESP32 GPIO17 (TX2).
+HardwareSerial STM32Serial(2);
+static char stm32Line[128];
+static size_t stm32LineLen = 0;
+static char latestTemp[128];
+static bool haveTemp = false;
+
 constexpr uint8_t SWCLK = 18, SWDIO = 19;
+constexpr uint8_t STM32_RX = 16, STM32_TX = 17;
 constexpr uint32_t HALF_US = 1;
-constexpr uint32_t FLASH_BASE = 0x08000000 UL, FLASH_SIZE_REG = 0x1FFFF7E0 UL;
-constexpr uint32_t FLASH_SR = 0x4002200C UL, FLASH_CR = 0x40022010 UL, FLASH_AR = 0x40022014 UL, FLASH_KEYR = 0x40022004 UL;
-constexpr uint32_t PAGE_SIZE = 1024 UL;
+constexpr uint32_t FLASH_BASE = 0x08000000UL, FLASH_SIZE_REG = 0x1FFFF7E0UL;
+constexpr uint32_t FLASH_SR = 0x4002200CUL, FLASH_CR = 0x40022010UL, FLASH_AR = 0x40022014UL, FLASH_KEYR = 0x40022004UL;
+constexpr uint32_t PAGE_SIZE = 1024UL;
 
 static void out() {
   pinMode(SWDIO, OUTPUT);
@@ -33,12 +41,12 @@ static bool rb() {
   return b;
 }
 static void wbits(uint32_t v, int n) {
-  for (int i = 0; i < n; i++) wb((v >> i) & 1 U);
+  for (int i = 0; i < n; i++) wb((v >> i) & 1U);
 }
 static uint32_t rbits(int n) {
   uint32_t v = 0;
   for (int i = 0; i < n; i++)
-    if (rb()) v |= 1 UL << i;
+    if (rb()) v |= 1UL << i;
   return v;
 }
 static void resetLine() {
@@ -56,12 +64,12 @@ static void swdInit() {
   for (int i = 0; i < 4; i++) clk();
 }
 static uint8_t req(bool ap, bool rd, uint8_t a) {
-  uint8_t a2 = (a >> 2) & 1 U, a3 = (a >> 3) & 1 U, p = (ap ? 1 : 0) ^ (rd ? 1 : 0) ^ a2 ^ a3;
-  return 0x81 U | (ap << 1) | (rd << 2) | (a2 << 3) | (a3 << 4) | (p << 5);
+  uint8_t a2 = (a >> 2) & 1U, a3 = (a >> 3) & 1U, p = (ap ? 1 : 0) ^ (rd ? 1 : 0) ^ a2 ^ a3;
+  return 0x81U | (ap << 1) | (rd << 2) | (a2 << 3) | (a3 << 4) | (p << 5);
 }
 static bool par(uint32_t v, bool p) {
   bool x = 0;
-  for (int i = 0; i < 32; i++) x ^= (v >> i) & 1 U;
+  for (int i = 0; i < 32; i++) x ^= (v >> i) & 1U;
   return x == p;
 }
 static bool dpRead(uint8_t a, uint32_t & v) {
@@ -100,7 +108,7 @@ static bool dpWrite(uint8_t a, uint32_t v) {
   out();
   bool p = 0;
   for (int i = 0; i < 32; i++) {
-    bool b = (v >> i) & 1 U;
+    bool b = (v >> i) & 1U;
     p ^= b;
     wb(b);
   }
@@ -127,7 +135,7 @@ static bool apWrite(uint8_t a, uint32_t v) {
   out();
   bool p = 0;
   for (int i = 0; i < 32; i++) {
-    bool b = (v >> i) & 1 U;
+    bool b = (v >> i) & 1U;
     p ^= b;
     wb(b);
   }
@@ -166,39 +174,39 @@ static bool memW32(uint32_t a, uint32_t v) {
 }
 static bool memR16(uint32_t a, uint16_t & v) {
   if (a & 1) return false;
-  if (!apWrite(0, 0x23000041 UL) || !apWrite(4, a)) return false;
+  if (!apWrite(0, 0x23000041UL) || !apWrite(4, a)) return false;
   uint32_t d = 0;
   if (!apRead(0x0C, d)) return false;
-  if (!apWrite(0, 0x23000052 UL)) return false;
-  v = (a & 2) ? (d >> 16) : (d & 0xFFFF U);
+  if (!apWrite(0, 0x23000052UL)) return false;
+  v = (a & 2) ? (d >> 16) : (d & 0xFFFFU);
   return true;
 }
 static bool memW16(uint32_t a, uint16_t v) {
   if (a & 1) return false;
-  if (!apWrite(0, 0x23000041 UL) || !apWrite(4, a)) return false;
+  if (!apWrite(0, 0x23000041UL) || !apWrite(4, a)) return false;
   uint32_t d = (a & 2) ? ((uint32_t) v << 16) : v;
   bool ok = apWrite(0x0C, d);
-  return apWrite(0, 0x23000052 UL) && ok;
+  return apWrite(0, 0x23000052UL) && ok;
 }
 static bool connect() {
   swdInit();
   uint32_t v = 0;
-  if (!dpRead(0, v) || !dpWrite(0, 0x1E UL) || !dpWrite(4, 0x50000000 UL)) return false;
+  if (!dpRead(0, v) || !dpWrite(0, 0x1EUL) || !dpWrite(4, 0x50000000UL)) return false;
   delayMicroseconds(100);
-  if (!dpRead(4, v) || (v & 0xF0000000 UL) != 0xF0000000 UL) return false;
-  return dpWrite(8, 0) && apWrite(0, 0x23000052 UL);
+  if (!dpRead(4, v) || (v & 0xF0000000UL) != 0xF0000000UL) return false;
+  return dpWrite(8, 0) && apWrite(0, 0x23000052UL);
 }
 static bool halt() {
-  return memW32(0xE000EDF0 UL, 0xA05F0003 UL);
+  return memW32(0xE000EDF0UL, 0xA05F0003UL);
 }
 static bool resume() {
-  return memW32(0xE000EDF0 UL, 0xA05F0001 UL);
+  return memW32(0xE000EDF0UL, 0xA05F0001UL);
 }
 static bool unlock() {
   uint32_t sr = 0, cr = 0;
   if (!memR32(FLASH_SR, sr) || !memR32(FLASH_CR, cr) || sr & 1) return false;
   if (!(cr & 0x80)) return true;
-  return memW32(FLASH_KEYR, 0x45670123 UL) && memW32(FLASH_KEYR, 0xCDEF89AB UL) && memR32(FLASH_CR, cr) && !(cr & 0x80);
+  return memW32(FLASH_KEYR, 0x45670123UL) && memW32(FLASH_KEYR, 0xCDEF89ABUL) && memR32(FLASH_CR, cr) && !(cr & 0x80);
 }
 static bool waitReady(uint32_t ms = 5000) {
   uint32_t sr = 0;
@@ -213,38 +221,60 @@ static bool waitReady(uint32_t ms = 5000) {
 static bool erasePage(uint32_t a) {
   uint32_t cr = 0;
   if (!memR32(FLASH_CR, cr)) return false;
-  cr = (cr & ~0x43 UL) | 2 UL;
-  if (!memW32(FLASH_CR, cr) || !memW32(FLASH_AR, a) || !memW32(FLASH_CR, cr | 0x40 UL) || !waitReady()) return false;
-  return memW32(FLASH_CR, cr & ~2 UL);
+  cr = (cr & ~0x43UL) | 2UL;
+  if (!memW32(FLASH_CR, cr) || !memW32(FLASH_AR, a) || !memW32(FLASH_CR, cr | 0x40UL) || !waitReady()) return false;
+  return memW32(FLASH_CR, cr & ~2UL);
 }
 static bool programChunk(uint32_t a,
   const uint8_t * d, size_t n) {
+  constexpr uint32_t SR_BSY = 1UL;
+  constexpr uint32_t SR_PGERR = 4UL;
+  constexpr uint32_t SR_WRPRTERR = 0x10UL;
+  constexpr uint32_t SR_EOP = 0x20UL;
+  constexpr uint32_t SR_FLAGS = SR_EOP | SR_PGERR | SR_WRPRTERR;
   if ((a & 1) || !n || n > 256) return false;
-  if (!apWrite(0, 0x23000041 UL)) return false;
-  uint32_t cr = 0;
-  if (!memR32(FLASH_CR, cr) || !memW32(FLASH_CR, cr | 1 UL)) return false;
-  for (size_t i = 0; i < n; i += 2) {
-    uint16_t h = d[i] | ((i + 1 < n) ? ((uint16_t) d[i + 1] << 8) : 0xFF00 U);
-    if (!memW16(a + i, h) || !waitReady()) return false;
+
+  uint32_t sr = 0, cr = 0;
+  if (!memR32(FLASH_SR, sr) || (sr & SR_BSY) || !memR32(FLASH_CR, cr) || (cr & 0x80UL)) return false;
+  if (sr & SR_FLAGS) {
+    if (!memW32(FLASH_SR, sr & SR_FLAGS) || !memR32(FLASH_SR, sr) || (sr & SR_FLAGS)) return false;
   }
-  if (!memR32(FLASH_CR, cr)) return false;
-  return memW32(FLASH_CR, cr & ~1 UL);
+
+  cr |= 1UL;
+  if (!memW32(FLASH_CR, cr) || !memR32(FLASH_CR, cr) || !(cr & 1UL)) return false;
+
+  for (size_t i = 0; i < n; i += 2) {
+    uint16_t h = d[i] | ((i + 1 < n) ? ((uint16_t) d[i + 1] << 8) : 0xFF00U);
+    if (!memW16(a + i, h)) return false;
+    unsigned long start = millis();
+    while (true) {
+      if (!memR32(FLASH_SR, sr)) return false;
+      if (!(sr & SR_BSY)) break;
+      if (millis() - start >= 5000) return false;
+      delay(1);
+    }
+    if (sr & (SR_PGERR | SR_WRPRTERR)) return false;
+    if (!(sr & SR_EOP)) return false;
+    if (!memW32(FLASH_SR, SR_EOP)) return false;
+  }
+
+  return memW32(FLASH_CR, cr & ~1UL);
 }
 static bool verifyChunk(uint32_t a,
   const uint8_t * d, size_t n) {
   for (size_t i = 0; i < n; i += 2) {
-    uint16_t e = d[i] | ((i + 1 < n) ? ((uint16_t) d[i + 1] << 8) : 0xFF00 U), v = 0;
+    uint16_t e = d[i] | ((i + 1 < n) ? ((uint16_t) d[i + 1] << 8) : 0xFF00U), v = 0;
     if (!memR16(a + i, v) || v != e) return false;
   }
   return true;
 }
 static uint32_t crc32(const uint8_t * d, size_t n) {
-  uint32_t c = 0xFFFFFFFF UL;
+  uint32_t c = 0xFFFFFFFFUL;
   for (size_t i = 0; i < n; i++) {
     c ^= d[i];
-    for (int b = 0; b < 8; b++) c = (c & 1) ? ((c >> 1) ^ 0xEDB88320 UL) : (c >> 1);
+    for (int b = 0; b < 8; b++) c = (c & 1) ? ((c >> 1) ^ 0xEDB88320UL) : (c >> 1);
   }
-  return c ^ 0xFFFFFFFF UL;
+  return c ^ 0xFFFFFFFFUL;
 }
 static bool readExact(uint8_t * d, size_t n) {
   size_t i = 0;
@@ -262,6 +292,35 @@ static bool num(const char * s, uint32_t & v) {
   v = (uint32_t) strtoul(s, & e, 0);
   return * e == 0;
 }
+
+static void pauseStm32Uart() {
+  STM32Serial.end();
+}
+
+static void resumeStm32Uart() {
+  STM32Serial.begin(115200, SERIAL_8N1, STM32_RX, STM32_TX);
+}
+
+static void pollStm32() {
+  while (STM32Serial.available()) {
+    char c = (char)STM32Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      stm32Line[stm32LineLen] = 0;
+      if (stm32LineLen) {
+        strncpy(latestTemp, stm32Line, sizeof(latestTemp) - 1);
+        latestTemp[sizeof(latestTemp) - 1] = 0;
+        haveTemp = strstr(latestTemp, "TEMP_") != nullptr;
+      }
+      stm32LineLen = 0;
+    } else if (stm32LineLen < sizeof(stm32Line) - 1) {
+      stm32Line[stm32LineLen++] = c;
+    } else {
+      stm32LineLen = 0;
+    }
+  }
+}
+
 static void command(char * line) {
   char * save = nullptr;
   char * c = strtok_r(line, " \t", & save);
@@ -270,29 +329,52 @@ static void command(char * line) {
     Serial.println("PONG STM32-SWD");
     return;
   }
+  if (!strcasecmp(c, "TEMP")) {
+    pollStm32();
+    if (haveTemp) Serial.printf("OK %s\n", latestTemp);
+    else Serial.println("ERR NO_TEMP");
+    return;
+  }
+  if (!strcasecmp(c, "STATUS")) {
+    pauseStm32Uart();
+    uint32_t dhcsr = 0;
+    if (!connect() || !memR32(0xE000EDF0UL, dhcsr)) {
+      Serial.println("ERR STATUS");
+      resumeStm32Uart();
+      return;
+    }
+    Serial.printf("OK DHCSR=0x%08lX HALTED=%u\n", (unsigned long) dhcsr, (unsigned)((dhcsr >> 17) & 1U));
+    resumeStm32Uart();
+    return;
+  }
   if (!strcasecmp(c, "INFO")) {
+    pauseStm32Uart();
     uint32_t id = 0, fs = 0;
     if (!connect() || !dpRead(0, id) || !memR32(FLASH_SIZE_REG, fs)) {
       Serial.println("ERR CONNECT");
+      resumeStm32Uart();
       return;
     }
     fs &= 0xFFFF;
-    Serial.printf("OK ID=0x%08lX FLASH_SIZE=%lu PAGE_SIZE=1024 BASE=0x08000000\n", (unsigned long) id, (unsigned long) fs * 1024 UL);
+    Serial.printf("OK ID=0x%08lX FLASH_SIZE=%lu PAGE_SIZE=1024 BASE=0x08000000\n", (unsigned long) id, (unsigned long) fs * 1024UL);
+    resumeStm32Uart();
     return;
   }
   if (!strcasecmp(c, "ERASE")) {
+    pauseStm32Uart();
     uint32_t a = 0, n = 0, fs = 0;
     if (!num(strtok_r(nullptr, " \t", & save), a) || !num(strtok_r(nullptr, " \t", & save), n) || !n || !connect() || !memR32(FLASH_SIZE_REG, fs) || !halt() || !unlock()) {
       Serial.println("ERR ERASE");
+      resumeStm32Uart();
       return;
     }
     fs &= 0xFFFF;
-    uint32_t end = FLASH_BASE + fs * 1024 UL;
+    uint32_t end = FLASH_BASE + fs * 1024UL;
     if (a < FLASH_BASE || a >= end || n > end - a) {
       Serial.println("ERR ERASE_RANGE");
       return;
     }
-    uint32_t first = a & ~(PAGE_SIZE - 1 UL), last = (a + n - 1) & ~(PAGE_SIZE - 1 UL);
+    uint32_t first = a & ~(PAGE_SIZE - 1UL), last = (a + n - 1) & ~(PAGE_SIZE - 1UL);
     for (uint32_t p = first; p <= last; p += PAGE_SIZE)
       if (!erasePage(p)) {
         Serial.printf("ERR ERASE 0x%08lX\n", (unsigned long) p);
@@ -306,7 +388,7 @@ static void command(char * line) {
       Serial.println("ERR WRITE_ARGS");
       return;
     }
-    if (!connect() || !memR32(FLASH_SIZE_REG, fs) || a < FLASH_BASE || n > fs * 1024 UL || (a - FLASH_BASE) > fs * 1024 UL - n || !halt() || !unlock()) {
+    if (!connect() || !memR32(FLASH_SIZE_REG, fs) || a < FLASH_BASE || n > fs * 1024UL || (a - FLASH_BASE) > fs * 1024UL - n || !halt() || !unlock()) {
       Serial.println("ERR WRITE_RANGE");
       return;
     }
@@ -328,7 +410,7 @@ static void command(char * line) {
     return;
   }
   if (!strcasecmp(c, "RESET")) {
-    if (!connect() || !memW32(0xE000ED0C UL, 0x05FA0004 UL)) {
+    if (!connect() || !memW32(0xE000ED0CUL, 0x05FA0004UL)) {
       Serial.println("ERR RESET");
       return;
     }
@@ -342,6 +424,7 @@ static void command(char * line) {
 
 void setup() {
   Serial.begin(115200);
+  STM32Serial.begin(115200, SERIAL_8N1, STM32_RX, STM32_TX);
   delay(300);
   pinMode(SWCLK, OUTPUT);
   digitalWrite(SWCLK, LOW);
@@ -353,6 +436,7 @@ void setup() {
 void loop() {
   static char line[96];
   static size_t n = 0;
+  pollStm32();
   while (Serial.available()) {
     char c = (char) Serial.read();
     if (c == '\r') continue;
