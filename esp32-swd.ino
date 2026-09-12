@@ -223,6 +223,31 @@ static bool memRead32(uint32_t address, uint32_t &value) {
     return swdReadAP(0x0C, value);
 }
 
+static bool memWrite32(uint32_t address, uint32_t value) {
+    uint8_t ack = 0;
+    if (!swdWriteAP(0x04, address, ack)) return false;
+    return swdWriteAP(0x0C, value, ack);
+}
+
+static bool cortexReadDHCSR(uint32_t &value) {
+    return memRead32(0xE000EDF0, value);
+}
+
+static bool cortexHalt() {
+    return memWrite32(0xE000EDF0, 0xA05F0003);
+}
+
+static bool cortexResume() {
+    return memWrite32(0xE000EDF0, 0xA05F0001);
+}
+
+static void printDhcsr(uint32_t value, const char *label) {
+    Serial.printf("%s\n", label);
+    Serial.printf("0x%08lX\n", (unsigned long)value);
+    Serial.printf("C_DEBUGEN = %u\n", (unsigned)((value >> 0) & 1U));
+    Serial.printf("C_HALT    = %u\n", (unsigned)((value >> 1) & 1U));
+}
+
 static bool selectApBank0() {
     uint8_t ack = 0;
     return swdWriteDP(0x08, 0x00000000, ack);
@@ -359,6 +384,77 @@ void setup() {
 
     Serial.println();
     Serial.printf("FLASH REGISTER READ: %s\n", flashRegsOk ? "OK" : "FAILED");
+    if (!flashRegsOk) return;
+
+    Serial.println();
+    Serial.println("[9] CORTEX-M3 DEBUG");
+
+    if (!cortexReadDHCSR(value)) {
+        Serial.println("DHCSR READ BEFORE: FAILED");
+        return;
+    }
+    printDhcsr(value, "DHCSR BEFORE:");
+
+    if (!cortexHalt()) {
+        Serial.println("HALT:");
+        Serial.println("WRITE ACK = FAILED");
+        return;
+    }
+    Serial.println("HALT:");
+    Serial.println("WRITE ACK = OK");
+
+    uint32_t dhcsrHalt = 0;
+    if (!cortexReadDHCSR(dhcsrHalt)) {
+        Serial.println("DHCSR AFTER HALT: READ FAILED");
+        return;
+    }
+    printDhcsr(dhcsrHalt, "DHCSR AFTER HALT:");
+    if ((dhcsrHalt & 0x00000003UL) != 0x00000003UL) {
+        Serial.println("CORTEX DEBUG TEST: FAILED (HALT VERIFY)");
+        return;
+    }
+
+    if (!cortexResume()) {
+        Serial.println("RESUME:");
+        Serial.println("WRITE ACK = FAILED");
+        return;
+    }
+    Serial.println("RESUME:");
+    Serial.println("WRITE ACK = OK");
+
+    uint32_t dhcsrRun = 0;
+    if (!cortexReadDHCSR(dhcsrRun)) {
+        Serial.println("DHCSR AFTER RESUME: READ FAILED");
+        return;
+    }
+    printDhcsr(dhcsrRun, "DHCSR AFTER RESUME:");
+    if ((dhcsrRun & 0x00000003UL) != 0x00000001UL) {
+        Serial.println("CORTEX DEBUG TEST: FAILED (RESUME VERIFY)");
+        return;
+    }
+
+    Serial.println("CORTEX DEBUG TEST: OK");
+
+    Serial.println();
+    Serial.println("[10] STM32F1 FLASH SIZE DETECTION (READ ONLY)");
+    uint32_t flashSizeInfo = 0;
+    if (!memRead32(0x1FFFF7E0, flashSizeInfo)) {
+        Serial.println("FLASH SIZE REGISTER READ: FAILED");
+        return;
+    }
+
+    uint32_t flashSizeKB = flashSizeInfo & 0xFFFFUL;
+    Serial.printf("FLASH SIZE REG 0x1FFFF7E0 = 0x%08lX\n", (unsigned long)flashSizeInfo);
+    Serial.printf("FLASH SIZE        = %lu KB\n", (unsigned long)flashSizeKB);
+
+    if (flashSizeKB == 0 || flashSizeKB == 0xFFFFUL) {
+        Serial.println("FLASH SIZE DETECTION: FAILED (INVALID FACTORY VALUE)");
+        return;
+    }
+
+    Serial.printf("FLASH RANGE       = 0x08000000 - 0x%08lX\n",
+                  (unsigned long)(0x08000000UL + flashSizeKB * 1024UL - 1UL));
+    Serial.println("FLASH SIZE DETECTION: OK");
 }
 
 void loop() { delay(1000); }
