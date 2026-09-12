@@ -258,6 +258,111 @@ static bool setupMemAp32() {
     if (!selectApBank0()) return false;
     return swdWriteAP(0x00, 0x23000052, ack);
 }
+static bool flashErasePage(uint32_t pageAddress) {
+    constexpr uint32_t FLASH_SR_ADDR = 0x4002200CUL;
+    constexpr uint32_t FLASH_CR_ADDR = 0x40022010UL;
+    constexpr uint32_t FLASH_AR_ADDR = 0x40022014UL;
+    constexpr uint32_t FLASH_SR_BSY = 0x00000001UL;
+    constexpr uint32_t FLASH_SR_PGERR = 0x00000004UL;
+    constexpr uint32_t FLASH_SR_WRPRTERR = 0x00000010UL;
+    constexpr uint32_t FLASH_CR_PER = 0x00000002UL;
+    constexpr uint32_t FLASH_CR_STRT = 0x00000040UL;
+    constexpr uint32_t FLASH_CR_LOCK = 0x00000080UL;
+    constexpr uint32_t FLASH_TIMEOUT_MS = 5000UL;
+
+    Serial.println();
+    Serial.println("[13] STM32F1 FLASH SINGLE PAGE ERASE");
+    uint32_t sr = 0;
+    uint32_t cr = 0;
+    if (!memRead32(FLASH_SR_ADDR, sr)) {
+        Serial.println("FLASH SR BEFORE: READ FAILED");
+        return false;
+    }
+    Serial.printf("ERASE ADDRESS       = 0x%08lX\n", (unsigned long)pageAddress);
+    Serial.printf("FLASH SR BEFORE     = 0x%08lX\n", (unsigned long)sr);
+    if ((sr & FLASH_SR_BSY) != 0) {
+        Serial.println("FLASH PAGE ERASE: FAILED (FLASH BUSY)");
+        return false;
+    }
+    if (!memRead32(FLASH_CR_ADDR, cr)) {
+        Serial.println("FLASH CR BEFORE: READ FAILED");
+        return false;
+    }
+    Serial.printf("FLASH CR BEFORE     = 0x%08lX\n", (unsigned long)cr);
+    if ((cr & FLASH_CR_LOCK) != 0) {
+        Serial.println("FLASH PAGE ERASE: FAILED (FLASH LOCKED)");
+        return false;
+    }
+    cr |= FLASH_CR_PER;
+    if (!memWrite32(FLASH_CR_ADDR, cr)) {
+        Serial.println("FLASH CR PER WRITE: FAILED");
+        return false;
+    }
+    Serial.println("FLASH PER           = 1");
+    uint32_t crConfirm = 0;
+    if (!memRead32(FLASH_CR_ADDR, crConfirm)) {
+        Serial.println("FLASH CR PER CONFIRM: READ FAILED");
+        return false;
+    }
+    if ((crConfirm & FLASH_CR_LOCK) != 0 || (crConfirm & FLASH_CR_PER) == 0) {
+        Serial.printf("FLASH CR PER CONFIRM = 0x%08lX\n", (unsigned long)crConfirm);
+        Serial.println("FLASH PAGE ERASE: FAILED (PER/LOCK VERIFY)");
+        return false;
+    }
+    if (!memWrite32(FLASH_AR_ADDR, pageAddress)) {
+        Serial.println("FLASH AR WRITE: FAILED");
+        return false;
+    }
+    Serial.printf("FLASH AR            = 0x%08lX\n", (unsigned long)pageAddress);
+    cr = crConfirm | FLASH_CR_STRT;
+    if (!memWrite32(FLASH_CR_ADDR, cr)) {
+        Serial.println("FLASH START WRITE: FAILED");
+        return false;
+    }
+    Serial.println("FLASH START         = 1");
+    Serial.println("WAITING FOR BSY...");
+    const unsigned long startMs = millis();
+    while (true) {
+        if (!memRead32(FLASH_SR_ADDR, sr)) {
+            Serial.println("FLASH SR DURING ERASE: READ FAILED");
+            return false;
+        }
+        if ((sr & FLASH_SR_BSY) == 0) break;
+        if ((millis() - startMs) >= FLASH_TIMEOUT_MS) {
+            Serial.println("FLASH PAGE ERASE: TIMEOUT");
+            return false;
+        }
+        delay(1);
+    }
+    Serial.printf("FLASH SR AFTER      = 0x%08lX\n", (unsigned long)sr);
+    if ((sr & FLASH_SR_PGERR) != 0 || (sr & FLASH_SR_WRPRTERR) != 0) {
+        Serial.printf("FLASH ERROR FLAGS   = PGERR=%u WRPRTERR=%u\n",
+                      (unsigned)((sr & FLASH_SR_PGERR) != 0),
+                      (unsigned)((sr & FLASH_SR_WRPRTERR) != 0));
+        cr = crConfirm & ~FLASH_CR_PER;
+        if (!memWrite32(FLASH_CR_ADDR, cr)) Serial.println("FLASH PER CLEAR: WRITE FAILED");
+        Serial.println("FLASH PAGE ERASE: FAIL");
+        return false;
+    }
+    cr = crConfirm & ~FLASH_CR_PER;
+    if (!memWrite32(FLASH_CR_ADDR, cr)) {
+        Serial.println("FLASH PER CLEAR: WRITE FAILED");
+        return false;
+    }
+    Serial.println("FLASH PER           = 0");
+    uint32_t crAfter = 0;
+    if (!memRead32(FLASH_CR_ADDR, crAfter)) {
+        Serial.println("FLASH CR AFTER: READ FAILED");
+        return false;
+    }
+    if ((crAfter & FLASH_CR_LOCK) != 0 || (crAfter & FLASH_CR_PER) != 0) {
+        Serial.printf("FLASH CR AFTER      = 0x%08lX\n", (unsigned long)crAfter);
+        Serial.println("FLASH PAGE ERASE: FAIL (PER/LOCK FINAL VERIFY)");
+        return false;
+    }
+    Serial.println("FLASH PAGE ERASE: OK");
+    return true;
+}
 
 void setup() {
     Serial.begin(115200);
@@ -523,6 +628,7 @@ void setup() {
             return;
         }
         Serial.println("FLASH UNLOCK: OK");
+                if (!flashErasePage(0x08000000UL)) return;
         return;
     }
 
@@ -553,6 +659,9 @@ void setup() {
     }
     Serial.println("FLASH LOCK = 0");
     Serial.println("FLASH UNLOCK: OK");
+
+
+    if (!flashErasePage(0x08000000UL)) return;
 
 }
 
