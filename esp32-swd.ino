@@ -143,7 +143,6 @@ static bool swdWriteDP(uint8_t address, uint32_t value, uint8_t &ackOut) {
         return false;
     }
 
-    // Target-to-host turnaround before the host drives write data.
     swdioInput();
     clockOnce();
     swdioOutput();
@@ -154,8 +153,6 @@ static bool swdWriteDP(uint8_t address, uint32_t value, uint8_t &ackOut) {
         swdWriteBit(bit);
     }
     swdWriteBit(parity);
-    // STM32F1 SW-DP needs extra SWCLK cycles after a write for the
-    // asynchronous SWCLK/HCLK write to become effective.
     digitalWrite(SWDIO, LOW);
     clockOnce();
     clockOnce();
@@ -194,7 +191,6 @@ static bool swdWriteAP(uint8_t address, uint32_t value, uint8_t &ackOut) {
 }
 
 static bool swdReadAP(uint8_t address, uint32_t &value) {
-    // AP reads are posted. Issue the AP read, then fetch its result via DP RDBUFF.
     swdioOutput();
     swdWriteBits(makeRequest(true, true, address), 8);
     swdioInput();
@@ -209,7 +205,6 @@ static bool swdReadAP(uint8_t address, uint32_t &value) {
         return false;
     }
 
-    // Consume the AP transaction's data phase; the posted result is read from RDBUFF.
     uint32_t ignored = swdReadBits(32);
     bool receivedParity = swdReadBit();
     bool parityOk = checkParity32(ignored, receivedParity);
@@ -220,6 +215,23 @@ static bool swdReadAP(uint8_t address, uint32_t &value) {
     if (!parityOk) return false;
 
     return swdReadDP(0x0C, value);
+}
+
+static bool memRead32(uint32_t address, uint32_t &value) {
+    uint8_t ack = 0;
+    if (!swdWriteAP(0x04, address, ack)) return false;
+    return swdReadAP(0x0C, value);
+}
+
+static bool selectApBank0() {
+    uint8_t ack = 0;
+    return swdWriteDP(0x08, 0x00000000, ack);
+}
+
+static bool setupMemAp32() {
+    uint8_t ack = 0;
+    if (!selectApBank0()) return false;
+    return swdWriteAP(0x00, 0x23000052, ack);
 }
 
 void setup() {
@@ -315,6 +327,38 @@ void setup() {
         }
         Serial.printf("      [0x%08lX] = 0x%08lX\n", 0x08000000UL + (unsigned long)(i * 4), (unsigned long)value);
     }
+
+    Serial.println();
+    Serial.println("[8] STM32F1 FLASH CONTROLLER REGISTERS (READ ONLY)");
+    if (!setupMemAp32()) {
+        Serial.println("      MEM-AP SETUP FAILED");
+        return;
+    }
+
+    struct FlashReg { uint32_t address; const char *name; };
+    const FlashReg regs[] = {
+        {0x40022000, "FLASH_ACR"},
+        {0x40022004, "FLASH_KEYR"},
+        {0x40022008, "FLASH_OPTKEYR"},
+        {0x4002200C, "FLASH_SR"},
+        {0x40022010, "FLASH_CR"},
+        {0x40022014, "FLASH_AR"},
+        {0x4002201C, "FLASH_OBR"},
+        {0x40022020, "FLASH_WRPR"},
+    };
+
+    bool flashRegsOk = true;
+    for (const auto &reg : regs) {
+        if (!memRead32(reg.address, value)) {
+            Serial.printf("      %s 0x%08lX = READ FAILED\n", reg.name, (unsigned long)reg.address);
+            flashRegsOk = false;
+            break;
+        }
+        Serial.printf("      %-13s 0x%08lX = 0x%08lX\n", reg.name, (unsigned long)reg.address, (unsigned long)value);
+    }
+
+    Serial.println();
+    Serial.printf("FLASH REGISTER READ: %s\n", flashRegsOk ? "OK" : "FAILED");
 }
 
 void loop() { delay(1000); }
