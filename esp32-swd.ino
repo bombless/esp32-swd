@@ -229,6 +229,54 @@ static bool memWrite32(uint32_t address, uint32_t value) {
     return swdWriteAP(0x0C, value, ack);
 }
 
+static bool memWrite16(uint32_t address, uint16_t value) {
+    uint8_t ack = 0;
+    if (!swdWriteAP(0x04, address, ack)) return false;
+    if (!swdWriteAP(0x00, 0x23000051UL, ack)) return false;
+    bool ok = swdWriteAP(0x0C, static_cast<uint32_t>(value), ack);
+    if (!swdWriteAP(0x00, 0x23000052UL, ack)) return false;
+    return ok;
+}
+
+static bool flashProgramHalfword(uint32_t address, uint16_t value) {
+    constexpr uint32_t FLASH_SR_ADDR = 0x4002200CUL;
+    constexpr uint32_t FLASH_CR_ADDR = 0x40022010UL;
+    constexpr uint32_t FLASH_SR_BSY = 0x00000001UL;
+    constexpr uint32_t FLASH_SR_PGERR = 0x00000004UL;
+    constexpr uint32_t FLASH_SR_WRPRTERR = 0x00000010UL;
+    constexpr uint32_t FLASH_CR_PG = 0x00000001UL;
+    constexpr uint32_t FLASH_TIMEOUT_MS = 5000UL;
+
+    uint32_t sr = 0;
+    uint32_t cr = 0;
+    if (!memRead32(FLASH_SR_ADDR, sr)) return false;
+    if ((sr & FLASH_SR_BSY) != 0) return false;
+    if (!memRead32(FLASH_CR_ADDR, cr)) return false;
+    if ((cr & 0x00000080UL) != 0) return false;
+
+    cr |= FLASH_CR_PG;
+    if (!memWrite32(FLASH_CR_ADDR, cr)) return false;
+
+    uint32_t crConfirm = 0;
+    if (!memRead32(FLASH_CR_ADDR, crConfirm)) return false;
+    if ((crConfirm & FLASH_CR_PG) == 0 || (crConfirm & 0x00000080UL) != 0) return false;
+
+    if (!memWrite16(address, value)) return false;
+
+    const unsigned long startMs = millis();
+    while (true) {
+        if (!memRead32(FLASH_SR_ADDR, sr)) return false;
+        if ((sr & FLASH_SR_BSY) == 0) break;
+        if ((millis() - startMs) >= FLASH_TIMEOUT_MS) return false;
+        delay(1);
+    }
+
+    if ((sr & FLASH_SR_PGERR) != 0 || (sr & FLASH_SR_WRPRTERR) != 0) return false;
+
+    cr = crConfirm & ~FLASH_CR_PG;
+    return memWrite32(FLASH_CR_ADDR, cr);
+}
+
 static bool cortexReadDHCSR(uint32_t &value) {
     return memRead32(0xE000EDF0, value);
 }
@@ -361,6 +409,37 @@ static bool flashErasePage(uint32_t pageAddress) {
         return false;
     }
     Serial.println("FLASH PAGE ERASE: OK");
+    return true;
+}
+
+static bool flashVerifyErasePage0() {
+    constexpr uint32_t FLASH_BASE = 0x08000000UL;
+    constexpr uint32_t EXPECTED = 0xFFFFFFFFUL;
+
+    Serial.println();
+    Serial.println("[14] STM32F1 FLASH ERASE VERIFY");
+
+    for (uint32_t offset = 0; offset < 16UL; offset += 4UL) {
+        uint32_t address = FLASH_BASE + offset;
+        uint32_t value = 0;
+        if (!memRead32(address, value)) {
+            Serial.printf("ADDRESS 0x%08lX = READ FAILED\n", (unsigned long)address);
+            Serial.println("FLASH ERASE VERIFY: FAIL");
+            return false;
+        }
+
+        Serial.printf("ADDRESS 0x%08lX = 0x%08lX\n",
+                      (unsigned long)address,
+                      (unsigned long)value);
+
+        if (value != EXPECTED) {
+            Serial.printf("FLASH ERASE VERIFY: FAIL (0x%08lX != 0xFFFFFFFF)\n",
+                          (unsigned long)value);
+            return false;
+        }
+    }
+
+    Serial.println("FLASH ERASE VERIFY: OK");
     return true;
 }
 
@@ -609,7 +688,7 @@ void setup() {
 
     uint32_t flashCrBeforeUnlock = 0;
     if (!memRead32(0x40022010, flashCrBeforeUnlock)) {
-        Serial.println("FLASH P� BEFORE UNLOCK: READ FAILED");
+        Serial.println("FLASH CR BEFORE UNLOCK: READ FAILED");
         return;
     }
     Serial.printf("FLASH CR BEFORE UNLOCK = 0x%08lX\n", (unsigned long)flashCrBeforeUnlock);
@@ -628,7 +707,8 @@ void setup() {
             return;
         }
         Serial.println("FLASH UNLOCK: OK");
-                if (!flashErasePage(0x08000000UL)) return;
+        if (!flashErasePage(0x08000000UL)) return;
+        if (!flashVerifyErasePage0()) return;
         return;
     }
 
@@ -660,9 +740,8 @@ void setup() {
     Serial.println("FLASH LOCK = 0");
     Serial.println("FLASH UNLOCK: OK");
 
-
     if (!flashErasePage(0x08000000UL)) return;
-
+    if (!flashVerifyErasePage0()) return;
 }
 
 void loop() { delay(1000); }
