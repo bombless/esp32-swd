@@ -277,6 +277,46 @@ static bool flashProgramHalfword(uint32_t address, uint16_t value) {
     return memWrite32(FLASH_CR_ADDR, cr);
 }
 
+static bool flashHalfwordStage6Test() {
+    constexpr uint32_t TEST_ADDRESS = 0x08000000UL;
+    constexpr uint16_t TEST_VALUE = 0x1234U;
+    constexpr uint32_t EXPECTED = 0xFFFF1234UL;
+
+    Serial.println();
+    Serial.println("[15] STM32F1 FLASH HALF-WORD PROGRAM");
+    uint32_t before = 0;
+    if (!memRead32(TEST_ADDRESS, before)) {
+        Serial.println("FLASH HALFWORD WRITE: FAIL (INITIAL READ)");
+        return false;
+    }
+    Serial.printf("TEST ADDRESS       = 0x%08lX\n", (unsigned long)TEST_ADDRESS);
+    Serial.printf("INITIAL VALUE      = 0x%08lX\n", (unsigned long)before);
+    if (before != 0xFFFFFFFFUL) {
+        Serial.println("FLASH HALFWORD WRITE: FAIL (TEST WORD NOT ERASED)");
+        return false;
+    }
+
+    Serial.println("FLASH PG            = 1");
+    Serial.println("PROGRAM HALFWORD   = 0x1234");
+    if (!flashProgramHalfword(TEST_ADDRESS, TEST_VALUE)) {
+        Serial.println("FLASH HALFWORD WRITE: FAIL");
+        return false;
+    }
+
+    uint32_t after = 0;
+    if (!memRead32(TEST_ADDRESS, after)) {
+        Serial.println("FLASH HALFWORD WRITE: FAIL (READ BACK)");
+        return false;
+    }
+    Serial.printf("READ BACK          = 0x%08lX\n", (unsigned long)after);
+    if (after != EXPECTED) {
+        Serial.printf("FLASH HALFWORD WRITE: FAIL (EXPECTED 0x%08lX)\n", (unsigned long)EXPECTED);
+        return false;
+    }
+
+    Serial.println("FLASH HALFWORD WRITE: OK");
+    return true;
+}
 static bool cortexReadDHCSR(uint32_t &value) {
     return memRead32(0xE000EDF0, value);
 }
@@ -709,6 +749,7 @@ void setup() {
         Serial.println("FLASH UNLOCK: OK");
         if (!flashErasePage(0x08000000UL)) return;
         if (!flashVerifyErasePage0()) return;
+        if (!flashHalfwordStage6Test()) return;
         return;
     }
 
@@ -742,6 +783,7 @@ void setup() {
 
     if (!flashErasePage(0x08000000UL)) return;
     if (!flashVerifyErasePage0()) return;
+    if (!flashHalfwordStage6Test()) return;
 }
 
 void loop() { delay(1000); }
