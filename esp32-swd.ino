@@ -455,6 +455,39 @@ void setup() {
     Serial.printf("FLASH RANGE       = 0x08000000 - 0x%08lX\n",
                   (unsigned long)(0x08000000UL + flashSizeKB * 1024UL - 1UL));
     Serial.println("FLASH SIZE DETECTION: OK");
+    Serial.println();
+    Serial.println("[11] STM32F1 FLASH PAGE/RANGE DETECTION (READ ONLY)");
+
+    uint32_t flashBase = 0x08000000UL;
+    uint32_t flashEnd = flashBase + flashSizeKB * 1024UL - 1UL;
+    uint32_t pageSize = 0;
+    const char *densityName = "UNKNOWN";
+
+    // STM32F103 medium-density devices use 1 KB pages.
+    if (flashSizeKB > 0 && flashSizeKB <= 128) {
+        pageSize = 1024UL;
+        densityName = "MEDIUM DENSITY";
+    }
+
+    if (pageSize == 0) {
+        Serial.println("FLASH PAGE/RANGE DETECTION: FAILED (UNSUPPORTED DENSITY)");
+        return;
+    }
+
+    if (((flashEnd - flashBase + 1UL) % pageSize) != 0) {
+        Serial.println("FLASH PAGE/RANGE DETECTION: FAILED (RANGE NOT PAGE ALIGNED)");
+        return;
+    }
+
+    uint32_t pageCount = flashSizeKB * 1024UL / pageSize;
+
+    Serial.printf("FLASH BASE        = 0x%08lX\n", (unsigned long)flashBase);
+    Serial.printf("FLASH SIZE        = %lu KB\n", (unsigned long)flashSizeKB);
+    Serial.printf("FLASH END         = 0x%08lX\n", (unsigned long)flashEnd);
+    Serial.printf("FLASH DENSITY     = %s\n", densityName);
+    Serial.printf("PAGE SIZE         = %lu bytes\n", (unsigned long)pageSize);
+    Serial.printf("PAGE COUNT        = %lu\n", (unsigned long)pageCount);
+    Serial.println("FLASH PAGE/RANGE DETECTION: OK");
 }
 
 void loop() { delay(1000); }
