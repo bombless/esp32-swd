@@ -488,6 +488,72 @@ void setup() {
     Serial.printf("PAGE SIZE         = %lu bytes\n", (unsigned long)pageSize);
     Serial.printf("PAGE COUNT        = %lu\n", (unsigned long)pageCount);
     Serial.println("FLASH PAGE/RANGE DETECTION: OK");
+    Serial.println();
+    Serial.println("[12] STM32F1 FLASH UNLOCK");
+
+    uint32_t flashSrBeforeUnlock = 0;
+    if (!memRead32(0x4002200C, flashSrBeforeUnlock)) {
+        Serial.println("FLASH SR BEFORE UNLOCK: READ FAILED");
+        return;
+    }
+    Serial.printf("FLASH SR BEFORE UNLOCK = 0x%08lX\n", (unsigned long)flashSrBeforeUnlock);
+    if ((flashSrBeforeUnlock & 0x00000001UL) != 0) {
+        Serial.println("FLASH UNLOCK: FAILED (FLASH BUSY)");
+        return;
+    }
+
+    uint32_t flashCrBeforeUnlock = 0;
+    if (!memRead32(0x40022010, flashCrBeforeUnlock)) {
+        Serial.println("FLASH P� BEFORE UNLOCK: READ FAILED");
+        return;
+    }
+    Serial.printf("FLASH CR BEFORE UNLOCK = 0x%08lX\n", (unsigned long)flashCrBeforeUnlock);
+
+    const uint32_t FLASH_CR_LOCK = 0x00000080UL;
+    if ((flashCrBeforeUnlock & FLASH_CR_LOCK) == 0) {
+        Serial.println("FLASH ALREADY UNLOCKED");
+        uint32_t flashCrConfirm = 0;
+        if (!memRead32(0x40022010, flashCrConfirm)) {
+            Serial.println("FLASH LOCK CONFIRM: READ FAILED");
+            return;
+        }
+        Serial.printf("FLASH CR CONFIRM       = 0x%08lX\n", (unsigned long)flashCrConfirm);
+        if ((flashCrConfirm & FLASH_CR_LOCK) != 0) {
+            Serial.println("FLASH UNLOCK: FAILED (LOCK STILL SET)");
+            return;
+        }
+        Serial.println("FLASH UNLOCK: OK");
+        return;
+    }
+
+    Serial.println("FLASH LOCK = 1");
+    Serial.println("WRITING FLASH KEYR #1");
+    if (!memWrite32(0x40022004, 0x45670123UL)) {
+        Serial.println("FLASH KEYR #1: WRITE FAILED");
+        return;
+    }
+    Serial.println("FLASH KEYR #1: WRITE ACK OK");
+
+    Serial.println("WRITING FLASH KEYR #2");
+    if (!memWrite32(0x40022004, 0xCDEF89ABUL)) {
+        Serial.println("FLASH KEYR #2: WRITE FAILED");
+        return;
+    }
+    Serial.println("FLASH KEYR #2: WRITE ACK OK");
+
+    uint32_t flashCrAfterUnlock = 0;
+    if (!memRead32(0x40022010, flashCrAfterUnlock)) {
+        Serial.println("FLASH CR AFTER UNLOCK: READ FAILED");
+        return;
+    }
+    Serial.printf("FLASH CR AFTER UNLOCK  = 0x%08lX\n", (unsigned long)flashCrAfterUnlock);
+    if ((flashCrAfterUnlock & FLASH_CR_LOCK) != 0) {
+        Serial.println("FLASH UNLOCK: FAILED (LOCK STILL SET)");
+        return;
+    }
+    Serial.println("FLASH LOCK = 0");
+    Serial.println("FLASH UNLOCK: OK");
+
 }
 
 void loop() { delay(1000); }
